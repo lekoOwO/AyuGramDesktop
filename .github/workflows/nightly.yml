@@ -1,0 +1,64 @@
+name: Nightly Build (Linux)
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Linux Binary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Build
+        env:
+          TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID || '2040' }}
+          TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH || 'b18441a1ff607e10a989891a5462e627' }}
+        run: |
+          docker run --rm \
+            -u "$(id -u)" \
+            -v "$PWD:/usr/src/tdesktop" \
+            ghcr.io/telegramdesktop/tdesktop/centos_env:latest \
+            /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
+            -D "TDESKTOP_API_ID=${TDESKTOP_API_ID}" \
+            -D "TDESKTOP_API_HASH=${TDESKTOP_API_HASH}"
+
+      - name: Strip and package binary
+        run: |
+          strip out/Release/Telegram
+          tar -cJf AyuGram-nightly-linux.tar.xz -C out/Release Telegram
+
+      - name: Get short commit SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Get version string
+        id: version
+        run: |
+          ver=$(awk '/^AppVersionStrSmall/ {print $2}' Telegram/build/version)
+          echo "ver=${ver}" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update nightly pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly (${{ steps.version.outputs.ver }}-${{ steps.sha.outputs.short }})
+          prerelease: true
+          body: |
+            Automated nightly build for Linux.
+
+            **Commit:** ${{ github.sha }}
+            **Version:** ${{ steps.version.outputs.ver }}
+            **Built at:** ${{ github.run_id }}
+
+            > ⚠️ This is an unstable pre-release build. Use at your own risk.
+          files: AyuGram-nightly-linux.tar.xz
