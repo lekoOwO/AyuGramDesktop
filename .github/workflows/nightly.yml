@@ -33,8 +33,8 @@ jobs:
 
       - name: Strip and package binary
         run: |
-          strip out/Release/Telegram
-          tar -cJf AyuGram-nightly-linux.tar.xz -C out/Release Telegram
+          strip Release/Telegram
+          tar -cJf AyuGram-nightly-linux.tar.xz -C Release Telegram
 
       - name: Get short commit SHA
         id: sha
