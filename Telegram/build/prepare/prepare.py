@@ -1543,7 +1543,7 @@ win:
         LIBJPEG_LIBS_RELEASE="%MOZJPEG_DIR%\\Release\\jpeg-static.lib" ^
         -system-webp ^
         -I "%WEBP_DIR%\\src" ^
-        -L "%WEBP_DIR%\\out\\release-static\\$X8664\\lib" ^
+        -L "%WEBP_DIR%\\out\\release-static\\%X8664%\\lib" ^
         -mp ^
         -no-feature-netlistmgr ^
         -nomake examples ^
