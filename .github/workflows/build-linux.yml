@@ -13,17 +13,31 @@ env:
 jobs:
   build-linux:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 1440
     container:
       image: ghcr.io/telegramdesktop/tdesktop/centos_env:latest
       options: --user 0
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Cache dependency directories
+        uses: actions/cache@v4
+        with:
+          path: |
+            Telegram/ThirdParty
+            Libraries/qt6
+            .ccache
+          key: ${{ runner.os }}-ayu-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ayu-
 
       - name: Install Poetry
         run: |
