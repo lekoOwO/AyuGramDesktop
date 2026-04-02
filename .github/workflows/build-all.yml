@@ -52,6 +52,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Install Poetry
+        run: |
+          python3 -m pip install --upgrade pip setuptools wheel
+          python3 -m pip install poetry
+
       - name: Prepare build environment
         run: |
           cd Telegram/build/prepare
