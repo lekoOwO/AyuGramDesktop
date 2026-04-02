@@ -1,0 +1,69 @@
+name: Build Linux (Flatpak)
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  TDESKTOP_API_ID: 2040
+  TDESKTOP_API_HASH: b18441a1ff607e10a989891a5462e627
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/telegramdesktop/tdesktop/centos_env:latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Prepare build environment
+        run: |
+          cd Telegram/build/prepare
+          ./linux.sh
+
+      - name: Build AyuGram
+        run: |
+          Telegram/build/docker/centos_env/build.sh \
+            -D TDESKTOP_API_ID=${{ env.TDESKTOP_API_ID }} \
+            -D TDESKTOP_API_HASH=${{ env.TDESKTOP_API_HASH }}
+
+      - name: Strip binary
+        run: |
+          strip out/Release/bin/AyuGram
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p artifacts
+          cp out/Release/bin/AyuGram artifacts/AyuGram-linux-x86_64
+          chmod +x artifacts/AyuGram-linux-x86_64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AyuGram-linux-x86_64
+          path: artifacts/AyuGram-linux-x86_64
+          retention-days: 7
+
+      - name: Generate release info
+        id: release_info
+        run: |
+          echo "commit_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "timestamp=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+          echo "release_name=CI-$(git rev-parse --short HEAD)-$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+        with:
+          tag_name: ${{ steps.release_info.outputs.release_name }}
+          name: "CI Build ${{ steps.release_info.outputs.commit_sha }} (${{ steps.release_info.outputs.timestamp }})"
+          prerelease: true
+          files: artifacts/AyuGram-linux-x86_64
+          token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,83 @@
+name: Build Windows x64
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  TDESKTOP_API_ID: 2040
+  TDESKTOP_API_HASH: b18441a1ff607e10a989891a5462e627
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Prepare build environment
+        shell: cmd
+        run: |
+          cd Telegram\build\prepare
+          call win.bat
+
+      - name: Configure project
+        shell: cmd
+        run: |
+          cd Telegram
+          call configure.bat x64 -D TDESKTOP_API_ID=%TDESKTOP_API_ID% -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH%
+
+      - name: Build project
+        shell: cmd
+        run: |
+          cmake --build out --config Release --target Telegram
+
+      - name: Prepare artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts -Force
+          Copy-Item out\Release\AyuGram.exe artifacts\AyuGram-windows-x64.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AyuGram-windows-x64
+          path: artifacts/AyuGram-windows-x64.exe
+          retention-days: 7
+
+      - name: Generate release info
+        id: release_info
+        shell: pwsh
+        run: |
+          $commitSha = git rev-parse --short HEAD
+          $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+          $releaseName = "CI-$commitSha-$timestamp"
+          echo "commit_sha=$commitSha" >> $env:GITHUB_OUTPUT
+          echo "timestamp=$timestamp" >> $env:GITHUB_OUTPUT
+          echo "release_name=$releaseName" >> $env:GITHUB_OUTPUT
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+        with:
+          tag_name: ${{ steps.release_info.outputs.release_name }}
+          name: "CI Build ${{ steps.release_info.outputs.commit_sha }} (${{ steps.release_info.outputs.timestamp }})"
+          prerelease: true
+          files: artifacts/AyuGram-windows-x64.exe
+          token: ${{ secrets.GITHUB_TOKEN }}

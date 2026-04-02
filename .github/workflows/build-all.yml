@@ -1,0 +1,214 @@
+name: Build All Platforms
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  TDESKTOP_API_ID: 2040
+  TDESKTOP_API_HASH: b18441a1ff607e10a989891a5462e627
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_name: ${{ steps.release_info.outputs.release_name }}
+      release_title: ${{ steps.release_info.outputs.release_title }}
+      commit_sha: ${{ steps.release_info.outputs.commit_sha }}
+      timestamp: ${{ steps.release_info.outputs.timestamp }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Generate release info
+        id: release_info
+        run: |
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          RELEASE_NAME="CI-${COMMIT_SHA}-${TIMESTAMP}"
+          RELEASE_TITLE="CI Build ${COMMIT_SHA} (${TIMESTAMP})"
+
+          echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
+          echo "release_name=${RELEASE_NAME}" >> $GITHUB_OUTPUT
+          echo "release_title=${RELEASE_TITLE}" >> $GITHUB_OUTPUT
+
+  build-linux:
+    runs-on: ubuntu-latest
+    needs: prepare-release
+    container:
+      image: ghcr.io/telegramdesktop/tdesktop/centos_env:latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Prepare build environment
+        run: |
+          cd Telegram/build/prepare
+          ./linux.sh
+
+      - name: Build AyuGram
+        run: |
+          Telegram/build/docker/centos_env/build.sh \
+            -D TDESKTOP_API_ID=${{ env.TDESKTOP_API_ID }} \
+            -D TDESKTOP_API_HASH=${{ env.TDESKTOP_API_HASH }}
+
+      - name: Strip binary
+        run: |
+          strip out/Release/bin/AyuGram
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p artifacts
+          cp out/Release/bin/AyuGram artifacts/AyuGram-linux-x86_64
+          chmod +x artifacts/AyuGram-linux-x86_64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AyuGram-linux-x86_64
+          path: artifacts/AyuGram-linux-x86_64
+          retention-days: 7
+
+  build-windows:
+    runs-on: windows-2022
+    needs: prepare-release
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Prepare build environment
+        shell: cmd
+        run: |
+          cd Telegram\build\prepare
+          call win.bat
+
+      - name: Configure project
+        shell: cmd
+        run: |
+          cd Telegram
+          call configure.bat x64 -D TDESKTOP_API_ID=%TDESKTOP_API_ID% -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH%
+
+      - name: Build project
+        shell: cmd
+        run: |
+          cmake --build out --config Release --target Telegram
+
+      - name: Prepare artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts -Force
+          Copy-Item out\Release\AyuGram.exe artifacts\AyuGram-windows-x64.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AyuGram-windows-x64
+          path: artifacts/AyuGram-windows-x64.exe
+          retention-days: 7
+
+  build-macos:
+    runs-on: macos-latest
+    needs: prepare-release
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          brew install git automake cmake wget pkg-config gnu-tar ninja nasm meson
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Prepare build environment
+        run: |
+          cd Telegram/build/prepare
+          ./mac.sh
+
+      - name: Configure project
+        run: |
+          cd Telegram
+          ./configure.sh -D TDESKTOP_API_ID=${{ env.TDESKTOP_API_ID }} -D TDESKTOP_API_HASH=${{ env.TDESKTOP_API_HASH }}
+
+      - name: Build project
+        run: |
+          cd out
+          xcodebuild -project Telegram.xcodeproj -scheme Telegram -configuration Release build
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p artifacts
+          cp -r out/Release/AyuGram.app artifacts/
+          cd artifacts
+          zip -r AyuGram-macos.zip AyuGram.app
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AyuGram-macos
+          path: artifacts/AyuGram-macos.zip
+          retention-days: 7
+
+  create-release:
+    runs-on: ubuntu-latest
+    needs: [prepare-release, build-linux, build-windows, build-macos]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display structure of downloaded files
+        run: ls -R artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.release_name }}
+          name: ${{ needs.prepare-release.outputs.release_title }}
+          prerelease: true
+          files: |
+            artifacts/AyuGram-linux-x86_64/AyuGram-linux-x86_64
+            artifacts/AyuGram-windows-x64/AyuGram-windows-x64.exe
+            artifacts/AyuGram-macos/AyuGram-macos.zip
+          body: |
+            Automated CI build from commit ${{ needs.prepare-release.outputs.commit_sha }}
+
+            Build timestamp: ${{ needs.prepare-release.outputs.timestamp }}
+
+            **Artifacts:**
+            - Linux x86_64 binary
+            - Windows x64 executable
+            - macOS Universal app (zipped)
+
+            **Note:** These are automated CI builds and may be unstable. Use at your own risk.
+          token: ${{ secrets.GITHUB_TOKEN }}
