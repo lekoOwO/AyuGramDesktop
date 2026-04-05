@@ -60,7 +60,8 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y python3-pip python3-setuptools
-          # flatpak sdkQt 
+          pip3 install --user poetry
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Restore Qt6 libraries cache
         id: cache-qt6-restore
