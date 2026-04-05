@@ -3,6 +3,10 @@ name: Build AyuGram Flatpak
 on:
   workflow_dispatch:
 
+env:
+  TDESKTOP_API_ID: 2040
+  TDESKTOP_API_HASH: b18441a1ff607e10a989891a5462e627
+
 jobs:
   build-and-release:
     name: Build and Release Flatpak
@@ -29,7 +33,7 @@ jobs:
 
       - name: Verify that required secrets are set
         run: |
-          if [ -z "${{ secrets.TDESKTOP_API_ID }}" ] || [ -z "${{ secrets.TDESKTOP_API_HASH }}" ]; then
+          if [ -z "${{ env.TDESKTOP_API_ID }}" ] || [ -z "${{ env.TDESKTOP_API_HASH }}" ]; then
             echo "::error:: Required secrets TDESKTOP_API_ID and/or TDESKTOP_API_HASH not found or empty."
             exit 1
           else
@@ -116,9 +120,6 @@ jobs:
             ${{ runner.os }}-ccache-
 
       - name: Build AyuGram binary
-        env:
-          TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
-          TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
         run: |
           mkdir -p .ccache
           sudo chmod -R 777 .ccache
