@@ -9,65 +9,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    timeout-minutes: 1440
 
     steps:
-      - name: Force clean workspace
-        run: |
-          echo "Forcing workspace cleanup..."
-          sudo chown -R $USER:$USER . || true
-          sudo rm -rf ./* .ccache .git* || true
-          sudo find . -path . -prune -o -exec rm -rf {} + || true
-
       - name: Checkout repository with submodules
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
           fetch-depth: 0
-
-      - name: Sync with upstream repository
-        run: |
-          git remote add upstream ${{ github.server_url }}/${{ github.repository }}.git || true
-
-          PRESERVE_BACKUP_ROOT="/tmp/preserve-backup-$$"
-          mkdir -p "$PRESERVE_BACKUP_ROOT"
-          for path in docs .github README.md; do
-            if [ -e "$path" ]; then
-              echo "Backing up $path before reset..."
-              cp -a "$path" "$PRESERVE_BACKUP_ROOT/"
-            fi
-          done
-
-          git fetch upstream --tags --no-recurse-submodules
-          git checkout dev
-
-          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-
-          echo "Resetting local dev branch to match upstream/dev..."
-          git reset --hard upstream/dev
-
-          CHANGES_MADE=false
-          for path in docs .github README.md; do
-            if [ -e "$PRESERVE_BACKUP_ROOT/$path" ]; then
-              echo "Restoring $path after reset..."
-              rm -rf "$path"
-              cp -a "$PRESERVE_BACKUP_ROOT/$path" "$path"
-              git add "$path" || true
-              CHANGES_MADE=true
-            fi
-          done
-
-          if [ "$CHANGES_MADE" = true ]; then
-            if ! git diff --cached --quiet; then
-              git commit -m "Preserve local docs and .github during upstream sync [skip ci]"
-            fi
-          else
-            echo "No preserved directories were restored."
-          fi
-
-          echo "Force pushing the updated dev branch to origin..."
-          git push origin dev --force
 
       - name: Initialize submodules for upstream/dev
         run: |
@@ -79,44 +27,6 @@ jobs:
             git submodule update --init --force --recursive
           fi
 
-      - name: Get latest version and create release tag
-        id: get_version
-        run: |
-          LATEST_TAG=$(git describe --tags --abbrev=0 upstream/dev)
-          APP_VERSION=${LATEST_TAG#v}
-          TIMESTAMP=$(date +%Y%m%d%H%M%S)
-          RELEASE_TAG="flatpak-${LATEST_TAG}-${TIMESTAMP}"
-
-          echo "Latest AyuGram tag: ${LATEST_TAG}"
-          echo "Application version: ${APP_VERSION}"
-          echo "Release tag for this fork: ${RELEASE_TAG}"
-
-          echo "APP_VERSION=${APP_VERSION}" >> $GITHUB_ENV
-          echo "LATEST_TAG=${LATEST_TAG}" >> $GITHUB_ENV
-          echo "RELEASE_TAG=${RELEASE_TAG}" >> $GITHUB_ENV
-          echo "TIMESTAMP=${TIMESTAMP}" >> $GITHUB_ENV
-
-          UPSTREAM_COMMIT=$(git rev-parse upstream/dev)
-          echo "Commit hash upstream/dev: ${UPSTREAM_COMMIT}"
-          echo "UPSTREAM_COMMIT=${UPSTREAM_COMMIT}" >> $GITHUB_ENV
-
-      - name: Update metainfo.xml with new release
-        run: |
-          METAINFO_FILE="docs/assets/flatpak-files/usr/share/metainfo/com.ayugram.desktop.metainfo.xml"
-          CURRENT_DATE=$(date +%Y-%m-%d)
-
-          echo "Adding release ${{ env.APP_VERSION }} ($CURRENT_DATE) to $METAINFO_FILE"
-
-          NEW_RELEASE="  <release version=\"${{ env.APP_VERSION }}\" date=\"${CURRENT_DATE}\"><description><p>Automatic Flatpak build. Synchronized with upstream tag ${{ env.LATEST_TAG }}.</p></description></release>"
-
-          if grep -q "<releases>" "$METAINFO_FILE"; then
-            sed -i "s|<releases>|<releases>${NEW_RELEASE}|" "$METAINFO_FILE"
-          else
-            sed -i "s|</component>|<releases>${NEW_RELEASE}</releases></component>|" "$METAINFO_FILE"
-          fi
-
-          echo "metainfo.xml updated"
-
       - name: Verify that required secrets are set
         run: |
           if [ -z "${{ secrets.TDESKTOP_API_ID }}" ] || [ -z "${{ secrets.TDESKTOP_API_HASH }}" ]; then
@@ -126,14 +36,20 @@ jobs:
             echo "Secrets found successfully."
           fi
 
+      - name: Install Python
+        uses: actions/setup-python@v4
+
+      - name: Install poetry
+        uses: abatilo/actions-poetry@v4
+
       - name: Install dependencies and Flatpak SDK
         run: |
-          sudo dnf install -y flatpak flatpak-builder python3-pip
-          pip3 install --user poetry
+          sudo apt update
+          sudo apt install -y flatpak flatpak-builder
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user -y --noninteractive org.gnome.Sdk//48
-          flatpak install --user -y --noninteractive org.gnome.Platform//48
+          flatpak install --user -y --noninteractive flathub org.gnome.Sdk//48
+          flatpak install --user -y --noninteractive flathub org.gnome.Platform//48
 
       - name: Cache TDesktop Dependencies
         id: cache-tdesktop-deps
@@ -208,8 +124,7 @@ jobs:
           sudo chmod -R 777 .ccache
 
           docker run --rm \
-            --cpus="3" \
-            -u root \
+            -u $(id -u) \
             -v "$PWD:/usr/src/tdesktop" \
             -v "$PWD/.ccache:/ccache" \
             ghcr.io/telegramdesktop/tdesktop/centos_env:latest \
@@ -239,15 +154,30 @@ jobs:
           flatpak-builder --repo=repo --force-clean --disable-rofiles-fuse build-dir com.ayugram.desktop.yml
           flatpak build-bundle repo ayugram-desktop-${{ env.APP_VERSION }}.flatpak com.ayugram.desktop
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: "AyuGram ${{ env.APP_VERSION }} Flatpak (build ${{ env.TIMESTAMP }})"
-          body: |
-            Automatic Flatpak build for AyuGram version ${{ env.LATEST_TAG }}.
-            Built from commit: ${{ env.UPSTREAM_COMMIT }}
+          name: AyuGram-linux-flatpak
+          path: ayugram-flatpak-build/ayugram-desktop-${{ env.APP_VERSION }}.flatpak
+          retention-days: 7
 
-            [Original GitHub release](https://github.com/AyuGram/AyuGramDesktop/releases/tag/${{ env.LATEST_TAG }})
+      - name: Generate release info
+        id: release_info
+        shell: pwsh
+        run: |
+          $commitSha = git rev-parse --short HEAD
+          $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+          $releaseName = "CI-$commitSha-$timestamp"
+          echo "commit_sha=$commitSha" >> $env:GITHUB_OUTPUT
+          echo "timestamp=$timestamp" >> $env:GITHUB_OUTPUT
+          echo "release_name=$releaseName" >> $env:GITHUB_OUTPUT
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+        with:
+          tag_name: ${{ steps.release_info.outputs.release_name }}
+          name: "CI Build ${{ steps.release_info.outputs.commit_sha }} (${{ steps.release_info.outputs.timestamp }})"
+          prerelease: true
           files: ayugram-flatpak-build/ayugram-desktop-${{ env.APP_VERSION }}.flatpak
           token: ${{ secrets.GITHUB_TOKEN }}
