@@ -43,93 +43,68 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout repository with submodules
+      - name: Maximize Disk Space (Aggressive Cleanup)
+        run: |
+          echo "Before cleanup:"
+          df -h
+          # 
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          #  Docker  APT 
+          docker rmi $(docker images -q) || true
+          sudo apt-get clean
+          echo "After cleanup:"
+          df -h
+
+      - name: Free Disk Space Action
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
           fetch-depth: 0
 
-      - name: Initialize submodules for upstream/dev
+      - name: Initialize submodules
         run: |
-          echo "Syncing and updating git submodules..."
           git submodule sync --recursive
           if ! git submodule update --init --force --recursive; then
-            echo "Submodule update failed. Suggesting upstream URL for Telegram/lib_ui..."
             git config submodule.Telegram/lib_ui.url https://github.com/desktop-app/lib_ui.git
             git submodule update --init --force --recursive
           fi
 
-      - name: Verify that required secrets are set
-        run: |
-          if [ -z "${{ env.TDESKTOP_API_ID }}" ] || [ -z "${{ env.TDESKTOP_API_HASH }}" ]; then
-            echo "::error:: Required secrets TDESKTOP_API_ID and/or TDESKTOP_API_HASH not found or empty."
-            exit 1
-          else
-            echo "Secrets found successfully."
-          fi
-
-      - name: Install Python
-        uses: actions/setup-python@v4
-
-      - name: Install poetry
-        uses: abatilo/actions-poetry@v4
-
-      - name: Install dependencies and Flatpak SDK
+      - name: Install Build Essentials
         run: |
           sudo apt update
-          sudo apt install -y flatpak flatpak-builder
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user -y --noninteractive flathub org.gnome.Sdk//48
-          flatpak install --user -y --noninteractive flathub org.gnome.Platform//48
-
-      - name: Cache TDesktop Dependencies
-        id: cache-tdesktop-deps
-        uses: actions/cache@v4
-        with:
-          path: Telegram/ThirdParty
-          key: ${{ runner.os }}-tdeps-${{ hashFiles('Telegram/build/prepare/dependencies.txt') }}
+          sudo apt install -y python3-pip python3-setuptools
+          # flatpak sdkQt 
 
       - name: Restore Qt6 libraries cache
         id: cache-qt6-restore
         uses: actions/cache/restore@v4
         with:
           path: Libraries/qt6
-          key: ${{ runner.os }}-qt6-${{ env.LATEST_TAG }}-${{ hashFiles('Telegram/build/prepare/linux.sh') }}
+          #  LATEST_TAG 
+          key: ${{ runner.os }}-qt6-v1-${{ hashFiles('Telegram/build/prepare/linux.sh') }}
           restore-keys: |
-            ${{ runner.os }}-qt6-${{ env.LATEST_TAG }}-
-            ${{ runner.os }}-qt6-
+            ${{ runner.os }}-qt6-v1-
 
-      - name: Inspect Qt6 cache (pre-prepare)
+      - name: Prepare libraries (Build Qt6)
         run: |
-          echo "Qt6 cache hit: ${{ steps.cache-qt6-restore.outputs.cache-hit }}"
-          if [ -d "Libraries/qt6" ]; then
-            echo "Qt6 size (pre):"
-            du -sh Libraries/qt6 || true
-            echo "Qt6 top-level dirs (pre):"
-            ls -1d Libraries/qt6/*/ | head -n 10 || true
-          else
-            echo "Libraries/qt6 not present (pre)"
-          fi
-
-      - name: Prepare libraries
-        run: ./Telegram/build/prepare/linux.sh
-
-      - name: Inspect Qt6 cache (post-prepare)
-        run: |
-          if [ -d "Libraries/qt6" ]; then
-            echo "Qt6 size (post):"
-            du -sh Libraries/qt6 || true
-            echo "Qt6 top-level dirs (post):"
-            ls -1d Libraries/qt6/*/ | head -n 10 || true
-          else
-            echo "Libraries/qt6 not present (post)"
-          fi
-
-      - name: Announce Qt6 cache save key
-        if: steps.cache-qt6-restore.outputs.cache-hit != 'true'
-        run: |
-          echo "Saving Qt6 cache with key: ${{ steps.cache-qt6-restore.outputs.cache-primary-key }}"
+          chmod +x Telegram/build/prepare/linux.sh
+          ./Telegram/build/prepare/linux.sh
+          df -h
 
       - name: Save Qt6 libraries cache
         if: steps.cache-qt6-restore.outputs.cache-hit != 'true'
@@ -140,18 +115,17 @@ jobs:
 
       - name: Cache ccache data
         uses: actions/cache@v4
-        id: cache-ccache
         with:
           path: .ccache
           key: ${{ runner.os }}-ccache-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-ccache-
 
-      - name: Build AyuGram binary
+      - name: Build AyuGram binary (Docker)
         run: |
           mkdir -p .ccache
           sudo chmod -R 777 .ccache
-
+          
           docker run --rm \
             -u $(id -u) \
             -v "$PWD:/usr/src/tdesktop" \
@@ -165,29 +139,46 @@ jobs:
                           export CC='ccache gcc' && \
                           export CXX='ccache g++' && \
                           /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
-                            -D TDESKTOP_API_ID=${TDESKTOP_API_ID} \
-                            -D TDESKTOP_API_HASH=${TDESKTOP_API_HASH} \
+                            -D TDESKTOP_API_ID=${{ env.TDESKTOP_API_ID }} \
+                            -D TDESKTOP_API_HASH=${{ env.TDESKTOP_API_HASH }} \
                             -D USE_CCACHE=ON && \
                           ccache -s"
+          df -h
+
+      - name: Install Flatpak SDK
+        run: |
+          sudo apt install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y --noninteractive flathub org.gnome.Sdk//48
+          flatpak install --user -y --noninteractive flathub org.gnome.Platform//48
 
       - name: Prepare Flatpak build directory
         run: |
           mkdir -p ayugram-flatpak-build
-          cp out/Release/AyuGram ayugram-flatpak-build/
-          cp -r docs/assets/flatpak-files/* ayugram-flatpak-build/
+          if [ -f out/Release/AyuGram ]; then
+            cp out/Release/AyuGram ayugram-flatpak-build/
+          else
+            echo "Error: AyuGram binary not found!"
+            exit 1
+          fi
+          # 
+          if [ -d docs/assets/flatpak-files ]; then
+            cp -r docs/assets/flatpak-files/* ayugram-flatpak-build/
+          fi
 
       - name: Build Flatpak package
         working-directory: ./ayugram-flatpak-build
         run: |
           rm -rf repo build-dir
+          #  com.ayugram.desktop.yml 
           flatpak-builder --repo=repo --force-clean --disable-rofiles-fuse build-dir com.ayugram.desktop.yml
-          flatpak build-bundle repo ayugram-desktop-${{ env.APP_VERSION }}.flatpak com.ayugram.desktop
+          flatpak build-bundle repo ayugram-desktop.flatpak com.ayugram.desktop
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: AyuGram-linux-flatpak
-          path: ayugram-flatpak-build/ayugram-desktop-${{ env.APP_VERSION }}.flatpak
+          path: ayugram-flatpak-build/ayugram-desktop.flatpak
           retention-days: 7
 
   build-windows:
