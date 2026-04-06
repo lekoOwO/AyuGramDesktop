@@ -165,7 +165,7 @@ jobs:
       - name: Apply MSVC PDB patch
         shell: pwsh
         run: |
-          @'
+          $patch = @"
           diff --git a/options_win.cmake b/options_win.cmake
           index c2d66cf..ccceb53 100644
           --- a/options_win.cmake
@@ -199,9 +199,10 @@ jobs:
           +        "$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>$<$<CONFIG:Release,MinSizeRel>:Embedded>"
           +        CACHE STRING "" FORCE)
             endif()
-            
+             
             set(CMAKE_CXX_SCAN_FOR_MODULES OFF CACHE BOOL "")
-          '@ | git -C "Telegram\cmake" apply -
+          "@
+          $patch | git -C "cmake" apply -
 
       - name: Setup Python
         uses: actions/setup-python@v6
