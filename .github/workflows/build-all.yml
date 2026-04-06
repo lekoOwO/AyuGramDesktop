@@ -249,7 +249,7 @@ jobs:
            set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "")
            option(DESKTOP_APP_TEST_APPS "Build test apps, development only." OFF)
            option(DESKTOP_APP_LOTTIE_DISABLE_RECOLORING "Disable recoloring of lottie animations." OFF)
-          '@ | git -C "Telegram\cmake" apply -
+          '@ | git -C "cmake" apply -
 
       - name: Configure project
         shell: cmd
