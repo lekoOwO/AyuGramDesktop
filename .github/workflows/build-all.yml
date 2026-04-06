@@ -162,47 +162,32 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Apply MSVC PDB patch
+      - name: Patch CMake Files
         shell: pwsh
         run: |
-          $patch = @"
-          diff --git a/options_win.cmake b/options_win.cmake
-          index c2d66cf..ccceb53 100644
-          --- a/options_win.cmake
-          +++ b/options_win.cmake
-          @@ -33,6 +33,7 @@ if (MSVC)
-                   /utf-8
-                   /W4
-                   /MP     # Enable multi process build.
-          +        /FS
-                   /EHsc   # Catch C++ exceptions only, extern C functions never throw a C++ exception.
-                   /w15038 # wrong initialization order
-                   /w14265 # class has virtual functions, but destructor is not virtual
-          @@ -65,7 +66,7 @@ if (MSVC)
-                INTERFACE
-                    $<$<CONFIG:Debug>:/NODEFAULTLIB:LIBCMT>
-                    $<$<AND:$<CONFIG:Debug>,$<BOOL:${build_win64}>>:/DEBUG:FASTLINK>
-          -        $<$<NOT:$<AND:$<CONFIG:Debug>,$<BOOL:${build_win64}>>>:$<IF:$<STREQUAL:$<GENEX_EVAL:$<TARGET_PROPERTY:MSVC_DEBUG_INFORMATION_FORMAT>>,ProgramDatabase>,/DEBUG,/DEBUG:NONE>>
-          +        $<$<NOT:$<AND:$<CONFIG:Debug>,$<BOOL:${build_win64}>>>:$<IF:$<BOOL:$<GENEX_EVAL:$<TARGET_PROPERTY:MSVC_DEBUG_INFORMATION_FORMAT>>>,/DEBUG,/DEBUG:NONE>>
-                    $<$<NOT:$<CONFIG:Debug>>:/OPT:REF>
-                    /INCREMENTAL:NO
-                    /DEPENDENTLOADFLAG:0x800
-          diff --git a/variables.cmake b/variables.cmake
-          index d6ac6c5..b2f492a 100644
-          --- a/variables.cmake
-          +++ b/variables.cmake
-          @@ -20,7 +20,10 @@
-            if (DESKTOP_APP_SPECIAL_TARGET STREQUAL ""
-                AND NOT DESKTOP_APP_USE_PACKAGED)
-          -    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "ProgramDatabase" CACHE STRING "")
-          +    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
-          +        "$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>$<$<CONFIG:Release,MinSizeRel>:Embedded>"
-          +        CACHE STRING "" FORCE)
-            endif()
-             
-            set(CMAKE_CXX_SCAN_FOR_MODULES OFF CACHE BOOL "")
-          "@
-          $patch | git -C "cmake" apply -
+          # 1. 處理 options_win.cmake
+          $optionsFile = "cmake/options_win.cmake"
+          $optContent = Get-Content $optionsFile -Raw
+
+          # 加入 /FS 參數
+          $optContent = $optContent -replace '(/MP\s+# Enable multi process build\.)', "`$1`n                /FS"
+
+          $oldExpr = '$<$<NOT:$<AND:$<CONFIG:Debug>,$<BOOL:${build_win64}>>>:$<IF:$<STREQUAL:$<GENEX_EVAL:$<TARGET_PROPERTY:MSVC_DEBUG_INFORMATION_FORMAT>>,ProgramDatabase>,/DEBUG,/DEBUG:NONE>>'
+          $newExpr = '$<$<NOT:$<AND:$<CONFIG:Debug>,$<BOOL:${build_win64}>>>:$<IF:$<BOOL:$<GENEX_EVAL:$<TARGET_PROPERTY:MSVC_DEBUG_INFORMATION_FORMAT>>>,/DEBUG,/DEBUG:NONE>>'
+          $optContent = $optContent.Replace($oldExpr, $newExpr)
+          
+          $optContent | Set-Content $optionsFile
+
+          # 2. 處理 variables.cmake
+          $varsFile = "cmake/variables.cmake"
+          $varsContent = Get-Content $varsFile -Raw
+
+          # 取代 Debug Information Format
+          $oldVar = 'set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "ProgramDatabase" CACHE STRING "")'
+          $newVar = "set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT`n        `"`$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>`$<$<CONFIG:Release,MinSizeRel>:Embedded>`"`n        CACHE STRING `"`" FORCE)"
+          
+          $varsContent = $varsContent.Replace($oldVar, $newVar)
+          $varsContent | Set-Content $varsFile
 
       - name: Setup Python
         uses: actions/setup-python@v6
