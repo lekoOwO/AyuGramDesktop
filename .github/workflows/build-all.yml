@@ -151,7 +151,7 @@ jobs:
             -u $(id -u) \
             -v "$PWD:/usr/src/tdesktop" \
             -v "$PWD/.ccache:/ccache" \
-            ghcr.io/telegramdesktop/tdesktop/centos_env:latest \
+            tdesktop:centos_env  \
             /bin/bash -c "dnf install -y ccache && \
                           export PATH=/usr/lib64/ccache:\$PATH && \
                           export CCACHE_DIR=/ccache && \
