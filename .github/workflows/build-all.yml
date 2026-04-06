@@ -102,9 +102,29 @@ jobs:
             ${{ runner.os }}-qt6-v1-
 
       - name: Prepare libraries (Build Qt6)
+        env:
+          EXTRA_CMAKE_ARGS: "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF -DQT_FEATURE_lto=OFF"
+          MAKEFLAGS: "-j2" 
         run: |
+          # 增加 Swap 空間（有時連結器需要更多虛擬記憶體避免崩潰）
+          sudo fallocate -l 4G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          
+          df -h
+          
           chmod +x Telegram/build/prepare/linux.sh
+
+          export CFLAGS="-g0 -O3"
+          export CXXFLAGS="-g0 -O3"
+          export LDFLAGS="-Wl,--no-keep-memory -Wl,--reduce-memory-overheads"
+          
           ./Telegram/build/prepare/linux.sh
+          
+          find Libraries/qt6 -name "*.o" -type f -delete
+          find Libraries/qt6 -name "*.a" -exec strip --strip-debug {} + || true
+          
           df -h
 
       - name: Save Qt6 libraries cache
