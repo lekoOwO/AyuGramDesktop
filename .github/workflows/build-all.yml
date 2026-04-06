@@ -37,134 +37,93 @@ jobs:
           echo "release_title=${RELEASE_TITLE}" >> $GITHUB_OUTPUT
 
   build-linux:
+    name: Build and Release Flatpak
     runs-on: ubuntu-latest
-    needs: prepare-release
     permissions:
       contents: write
 
+    env:
+      UPLOAD_ARTIFACT: "true"
+      ONLY_CACHE: "false"
+      IMAGE_TAG: tdesktop:centos_env
+
     steps:
-      - name: Maximize Disk Space (Aggressive Cleanup)
-        run: |
-          echo "Before cleanup:"
-          df -h
-          # 
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          #  Docker  APT 
-          docker rmi $(docker images -q) || true
-          sudo apt-get clean
-          echo "After cleanup:"
-          df -h
-
-      - name: Free Disk Space Action
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
-          fetch-depth: 0
-
-      - name: Initialize submodules
-        run: |
-          git submodule sync --recursive
-          if ! git submodule update --init --force --recursive; then
-            git config submodule.Telegram/lib_ui.url https://github.com/desktop-app/lib_ui.git
-            git submodule update --init --force --recursive
-          fi
-
-      - name: Install Build Essentials
+      
+      - name: First set up
         run: |
           sudo apt update
-          sudo apt install -y python3-pip python3-setuptools
-          pip3 install --user poetry
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          curl -sSL https://install.python-poetry.org | python3 -
+          cd Telegram/build/docker/centos_env
+          poetry install
+          DOCKERFILE=$(LTO= poetry run gen_dockerfile)
+          echo "$DOCKERFILE" > Dockerfile
+          rm -rf __pycache__
       
-      - name: Restore Qt6 libraries cache
-        id: cache-qt6-restore
-        uses: actions/cache/restore@v4
+      - name: Free Disk Space Action
+        uses: jlumbroso/free-disk-space@main
         with:
-          path: Libraries/qt6
-          #  LATEST_TAG 
-          key: ${{ runner.os }}-qt6-v1-${{ hashFiles('Telegram/build/prepare/linux.sh') }}
-          restore-keys: |
-            ${{ runner.os }}-qt6-v1-
+          tool-cache: true
 
-      - name: Prepare libraries (Build Qt6)
-        env:
-          EXTRA_CMAKE_ARGS: "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF -DQT_FEATURE_lto=OFF"
-          MAKEFLAGS: "-j2" 
+      - name: Set up Docker Buildx.
+        uses: docker/setup-buildx-action@v4
+  
+      - name: Libraries
+        uses: docker/build-push-action@v7
+        with:
+          context: Telegram/build/docker/centos_env
+          load: ${{ env.ONLY_CACHE == 'false' }}
+          tags: ${{ env.IMAGE_TAG }}
+          cache-from: type=local,src=${{ runner.temp }}/.buildx-cache
+          cache-to: type=local,dest=${{ runner.temp }}/.buildx-cache-new,mode=max
+
+      - name: Move cache
         run: |
-          # 增加 Swap 空間（有時連結器需要更多虛擬記憶體避免崩潰）
-          sudo fallocate -l 4G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          
-          df -h
-          
-          chmod +x Telegram/build/prepare/linux.sh
+          rm -rf ${{ runner.temp }}/.buildx-cache
+          mv ${{ runner.temp }}/.buildx-cache{-new,}
 
-          export CFLAGS="-g0 -O3"
-          export CXXFLAGS="-g0 -O3"
-          export LDFLAGS="-Wl,--no-keep-memory -Wl,--reduce-memory-overheads"
-          
-          ./Telegram/build/prepare/linux.sh
-          
-          find Libraries/qt6 -name "*.o" -type f -delete
-          find Libraries/qt6 -name "*.a" -exec strip --strip-debug {} + || true
-          
-          df -h
-
-      - name: Save Qt6 libraries cache
-        if: steps.cache-qt6-restore.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: Libraries/qt6
-          key: ${{ steps.cache-qt6-restore.outputs.cache-primary-key }}
-
-      - name: Cache ccache data
-        uses: actions/cache@v4
-        with:
-          path: .ccache
-          key: ${{ runner.os }}-ccache-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-ccache-
-
-      - name: Build AyuGram binary (Docker)
+      - name: Telegram Desktop build
+        if: env.ONLY_CACHE == 'false'
         run: |
-          mkdir -p .ccache
-          sudo chmod -R 777 .ccache
-          
+          DEFINE=""
+          if [ -n "${{ matrix.defines }}" ]; then
+            DEFINE="-D ${{ matrix.defines }}=ON"
+            echo Define from matrix: $DEFINE
+            echo "ARTIFACT_NAME=Telegram ${{ matrix.defines }}" >> $GITHUB_ENV
+          else
+            echo "ARTIFACT_NAME=Telegram" >> $GITHUB_ENV
+          fi
+
           docker run --rm \
-            -u $(id -u) \
-            -v "$PWD:/usr/src/tdesktop" \
-            -v "$PWD/.ccache:/ccache" \
-            tdesktop:centos_env  \
-            /bin/bash -c "dnf install -y ccache && \
-                          export PATH=/usr/lib64/ccache:\$PATH && \
-                          export CCACHE_DIR=/ccache && \
-                          export CCACHE_BASEDIR=/usr/src/tdesktop && \
-                          export CCACHE_COMPRESS=1 && \
-                          export CC='ccache gcc' && \
-                          export CXX='ccache g++' && \
-                          /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
-                            -D TDESKTOP_API_ID=${{ env.TDESKTOP_API_ID }} \
-                            -D TDESKTOP_API_HASH=${{ env.TDESKTOP_API_HASH }} \
-                            -D USE_CCACHE=ON && \
-                          ccache -s"
-          df -h
+          -u $(id -u) \
+          -v $PWD:/usr/src/tdesktop \
+          $IMAGE_TAG \
+          /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
+          -D CMAKE_CONFIGURATION_TYPES=Debug \
+          -D CMAKE_C_FLAGS_DEBUG="-O0 -fuse-ld=lld" \
+          -D CMAKE_CXX_FLAGS_DEBUG="-O0 -fuse-ld=lld" \
+          -D CMAKE_COMPILE_WARNING_AS_ERROR=ON \
+          -D TDESKTOP_API_TEST=ON \
+          -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF \
+          -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF \
+          $DEFINE
+
+      - name: Check
+        if: env.ONLY_CACHE == 'false'
+        run: |
+          filePath="out/Release/AyuGram"
+          if test -f "$filePath"; then
+            echo "Build successfully done! :)"
+
+            size=$(stat -c %s "$filePath")
+            echo "File size of ${filePath}: ${size} Bytes."
+          else
+            echo "Build error, output file does not exist."
+            exit 1
+          fi
 
       - name: Install Flatpak SDK
         run: |
