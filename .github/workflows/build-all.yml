@@ -43,8 +43,6 @@ jobs:
       contents: write
 
     env:
-      UPLOAD_ARTIFACT: "true"
-      ONLY_CACHE: "false"
       IMAGE_TAG: tdesktop:centos_env
 
     steps:
@@ -86,15 +84,14 @@ jobs:
           mv ${{ runner.temp }}/.buildx-cache{-new,}
 
       - name: Telegram Desktop build
-        if: env.ONLY_CACHE == 'false'
         run: |
           DEFINE=""
           if [ -n "${{ matrix.defines }}" ]; then
             DEFINE="-D ${{ matrix.defines }}=ON"
             echo Define from matrix: $DEFINE
-            echo "ARTIFACT_NAME=Telegram ${{ matrix.defines }}" >> $GITHUB_ENV
+            echo "ARTIFACT_NAME=AyuGram ${{ matrix.defines }}" >> $GITHUB_ENV
           else
-            echo "ARTIFACT_NAME=Telegram" >> $GITHUB_ENV
+            echo "ARTIFACT_NAME=AyuGram" >> $GITHUB_ENV
           fi
 
           docker run --rm \
@@ -102,17 +99,11 @@ jobs:
           -v $PWD:/usr/src/tdesktop \
           $IMAGE_TAG \
           /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
-          -D CMAKE_CONFIGURATION_TYPES=Debug \
-          -D CMAKE_C_FLAGS_DEBUG="-O0 -fuse-ld=lld" \
-          -D CMAKE_CXX_FLAGS_DEBUG="-O0 -fuse-ld=lld" \
-          -D CMAKE_COMPILE_WARNING_AS_ERROR=ON \
-          -D TDESKTOP_API_TEST=ON \
-          -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF \
-          -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF \
+          -D TDESKTOP_API_ID=${TDESKTOP_API_ID} \
+          -D TDESKTOP_API_HASH=${TDESKTOP_API_HASH} \
           $DEFINE
 
       - name: Check
-        if: env.ONLY_CACHE == 'false'
         run: |
           filePath="out/Release/AyuGram"
           if test -f "$filePath"; then
