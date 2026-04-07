@@ -6,6 +6,7 @@ on:
 env:
   TDESKTOP_API_ID: 2040
   TDESKTOP_API_HASH: b18441a1ff607e10a989891a5462e627
+  IMAGE_TAG: tdesktop:centos_env
 
 jobs:
   build-and-release:
@@ -14,34 +15,48 @@ jobs:
     permissions:
       contents: write
 
-    env:
-      IMAGE_TAG: tdesktop:centos_env
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
-      
+
+      - name: Maximize Swap space
+        run: |
+          sudo swapoff -a
+          sudo rm -f /mnt/swapfile
+          sudo fallocate -l 12G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
+      - name: Free Disk Space Action
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+
       - name: First set up
         run: |
           sudo apt update
           curl -sSL https://install.python-poetry.org | python3 -
           cd Telegram/build/docker/centos_env
+          export PATH="$HOME/.local/bin:$PATH"
           poetry install
+          
           DOCKERFILE=$(LTO= poetry run gen_dockerfile)
           echo "$DOCKERFILE" > Dockerfile
           rm -rf __pycache__
-      
-      - name: Free Disk Space Action
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
 
-      - name: Set up Docker Buildx.
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
-  
-      - name: Libraries
+
+      - name: Build Environment Image
         uses: docker/build-push-action@v7
         with:
           context: Telegram/build/docker/centos_env
@@ -60,7 +75,6 @@ jobs:
           DEFINE=""
           if [ -n "${{ matrix.defines }}" ]; then
             DEFINE="-D ${{ matrix.defines }}=ON"
-            echo Define from matrix: $DEFINE
             echo "ARTIFACT_NAME=AyuGram ${{ matrix.defines }}" >> $GITHUB_ENV
           else
             echo "ARTIFACT_NAME=AyuGram" >> $GITHUB_ENV
@@ -69,22 +83,23 @@ jobs:
           docker run --rm \
             -u $(id -u) \
             -v $PWD:/usr/src/tdesktop \
-            -e MAKEFLAGS="-j2" \
+            -e MAKEFLAGS="-j1" \
             $IMAGE_TAG \
             /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
               -D TDESKTOP_API_ID=${TDESKTOP_API_ID} \
               -D TDESKTOP_API_HASH=${TDESKTOP_API_HASH} \
+              -D CMAKE_BUILD_TYPE=Release \
               -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
+              -D TDESKTOP_API_UNITY_BUILD=OFF \
+              -D DESKTOP_APP_USE_PACKAGED_RLOTTIE=OFF \
               $DEFINE
 
-      - name: Check
+      - name: Check Binary
         run: |
           filePath="out/Release/AyuGram"
           if test -f "$filePath"; then
             echo "Build successfully done! :)"
-
-            size=$(stat -c %s "$filePath")
-            echo "File size of ${filePath}: ${size} Bytes."
+            ls -lh "$filePath"
           else
             echo "Build error, output file does not exist."
             exit 1
@@ -100,13 +115,7 @@ jobs:
       - name: Prepare Flatpak build directory
         run: |
           mkdir -p ayugram-flatpak-build
-          if [ -f out/Release/AyuGram ]; then
-            cp out/Release/AyuGram ayugram-flatpak-build/
-          else
-            echo "Error: AyuGram binary not found!"
-            exit 1
-          fi
-          # 
+          cp out/Release/AyuGram ayugram-flatpak-build/
           if [ -d docs/assets/flatpak-files ]; then
             cp -r docs/assets/flatpak-files/* ayugram-flatpak-build/
           fi
@@ -115,7 +124,6 @@ jobs:
         working-directory: ./ayugram-flatpak-build
         run: |
           rm -rf repo build-dir
-          #  com.ayugram.desktop.yml 
           flatpak-builder --repo=repo --force-clean --disable-rofiles-fuse build-dir com.ayugram.desktop.yml
           flatpak build-bundle repo ayugram-desktop.flatpak com.ayugram.desktop
 
@@ -131,17 +139,17 @@ jobs:
         shell: bash
         run: |
           commit_sha=$(git rev-parse --short HEAD)
-          timestamp=$(date +"%Y%m%d-%H%m%s")
+          timestamp=$(date +"%Y%m%d-%H%M")
           release_name="CI-$commit_sha-$timestamp"
-          echo "commit_sha=$commit_sha" >> $GITHUB_OUTPUT
-          echo "timestamp=$timestamp" >> $GITHUB_OUTPUT
           echo "release_name=$release_name" >> $GITHUB_OUTPUT
+          echo "commit_sha=$commit_sha" >> $GITHUB_OUTPUT
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_info.outputs.release_name }}
-          name: "CI Build ${{ steps.release_info.outputs.commit_sha }}"
+          name: "AyuGram Linux Build ${{ steps.release_info.outputs.commit_sha }}"
           prerelease: true
           files: ayugram-flatpak-build/ayugram-desktop.flatpak
           token: ${{ secrets.GITHUB_TOKEN }}
+          
