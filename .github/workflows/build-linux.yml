@@ -16,42 +16,48 @@ jobs:
       contents: write
 
     steps:
+      - name: Maximize Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Setup Swap and Docker Space
+        run: |
+          sudo swapoff -a
+          sudo rm -f /mnt/swapfile
+          # 建立 12G Swap
+          sudo fallocate -l 12G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          
+          # 將 Docker 數據移到 /mnt 以免撐爆根目錄
+          sudo mkdir -p /mnt/docker
+          sudo bash -c 'echo "{\"data-root\": \"/mnt/docker\"}" > /etc/docker/daemon.json'
+          sudo systemctl restart docker
+          free -h
+          df -h
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
 
-      - name: Maximize Swap space
-        run: |
-          sudo swapoff -a
-          sudo rm -f /mnt/swapfile
-          sudo fallocate -l 12G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          free -h
-
-      - name: Free Disk Space Action
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: false
-
-      - name: First set up
+      - name: Setup Environment
         run: |
           sudo apt update
           curl -sSL https://install.python-poetry.org | python3 -
-          cd Telegram/build/docker/centos_env
           export PATH="$HOME/.local/bin:$PATH"
+          cd Telegram/build/docker/centos_env
           poetry install
-          
+
+          # 確保不使用 LTO
           DOCKERFILE=$(LTO= poetry run gen_dockerfile)
           echo "$DOCKERFILE" > Dockerfile
-          rm -rf __pycache__
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -62,24 +68,14 @@ jobs:
           context: Telegram/build/docker/centos_env
           load: true
           tags: ${{ env.IMAGE_TAG }}
-          cache-from: type=local,src=${{ runner.temp }}/.buildx-cache
-          cache-to: type=local,dest=${{ runner.temp }}/.buildx-cache-new,mode=max
-
-      - name: Move cache
-        run: |
-          rm -rf ${{ runner.temp }}/.buildx-cache
-          mv ${{ runner.temp }}/.buildx-cache{-new,}
+          # 磁碟空間有限，建議「暫時關閉」本地快取，或減小快取規模
+          # cache-from: type=gha
+          # cache-to: type=gha,mode=max
 
       - name: Telegram Desktop build
         run: |
-          DEFINE=""
-          if [ -n "${{ matrix.defines }}" ]; then
-            DEFINE="-D ${{ matrix.defines }}=ON"
-            echo "ARTIFACT_NAME=AyuGram ${{ matrix.defines }}" >> $GITHUB_ENV
-          else
-            echo "ARTIFACT_NAME=AyuGram" >> $GITHUB_ENV
-          fi
-
+          # -e MAKEFLAGS="-j1" 防止記憶體爆炸
+          # -D TDESKTOP_API_UNITY_BUILD=OFF 減少單個編譯進程的 RAM 需求
           docker run --rm \
             -u $(id -u) \
             -v $PWD:/usr/src/tdesktop \
@@ -91,17 +87,15 @@ jobs:
               -D CMAKE_BUILD_TYPE=Release \
               -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
               -D TDESKTOP_API_UNITY_BUILD=OFF \
-              -D DESKTOP_APP_USE_PACKAGED_RLOTTIE=OFF \
-              $DEFINE
+              -D DESKTOP_APP_USE_PACKAGED_RLOTTIE=OFF
 
       - name: Check Binary
         run: |
-          filePath="out/Release/AyuGram"
-          if test -f "$filePath"; then
-            echo "Build successfully done! :)"
-            ls -lh "$filePath"
+          if [ -f out/Release/AyuGram ]; then
+            echo "Build successful."
+            ls -lh out/Release/AyuGram
           else
-            echo "Build error, output file does not exist."
+            echo "Build failed: Binary not found."
             exit 1
           fi
 
@@ -109,47 +103,24 @@ jobs:
         run: |
           sudo apt install -y flatpak flatpak-builder
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user -y --noninteractive flathub org.gnome.Sdk//48
-          flatpak install --user -y --noninteractive flathub org.gnome.Platform//48
+          flatpak install --user -y --noninteractive flathub org.gnome.Sdk//48 org.gnome.Platform//48
 
-      - name: Prepare Flatpak build directory
+      - name: Build Flatpak
         run: |
           mkdir -p ayugram-flatpak-build
           cp out/Release/AyuGram ayugram-flatpak-build/
           if [ -d docs/assets/flatpak-files ]; then
             cp -r docs/assets/flatpak-files/* ayugram-flatpak-build/
           fi
-
-      - name: Build Flatpak package
-        working-directory: ./ayugram-flatpak-build
-        run: |
-          rm -rf repo build-dir
+          cd ayugram-flatpak-build
           flatpak-builder --repo=repo --force-clean --disable-rofiles-fuse build-dir com.ayugram.desktop.yml
           flatpak build-bundle repo ayugram-desktop.flatpak com.ayugram.desktop
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: AyuGram-linux-flatpak
-          path: ayugram-flatpak-build/ayugram-desktop.flatpak
-          retention-days: 7
-
-      - name: Generate release info
-        id: release_info
-        shell: bash
-        run: |
-          commit_sha=$(git rev-parse --short HEAD)
-          timestamp=$(date +"%Y%m%d-%H%M")
-          release_name="CI-$commit_sha-$timestamp"
-          echo "release_name=$release_name" >> $GITHUB_OUTPUT
-          echo "commit_sha=$commit_sha" >> $GITHUB_OUTPUT
-
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
-          tag_name: ${{ steps.release_info.outputs.release_name }}
-          name: "AyuGram Linux Build ${{ steps.release_info.outputs.commit_sha }}"
-          prerelease: true
+          tag_name: "CI-${{ github.sha }}-${{ github.run_id }}"
+          name: "AyuGram Linux Build"
           files: ayugram-flatpak-build/ayugram-desktop.flatpak
           token: ${{ secrets.GITHUB_TOKEN }}
-          
