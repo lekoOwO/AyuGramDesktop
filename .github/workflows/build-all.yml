@@ -83,6 +83,15 @@ jobs:
           rm -rf ${{ runner.temp }}/.buildx-cache
           mv ${{ runner.temp }}/.buildx-cache{-new,}
 
+      - name: Add Swap
+        run: |
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo "Swap added:"
+          free -h
+
       - name: Telegram Desktop build
         run: |
           DEFINE=""
@@ -95,13 +104,15 @@ jobs:
           fi
 
           docker run --rm \
-          -u $(id -u) \
-          -v $PWD:/usr/src/tdesktop \
-          $IMAGE_TAG \
-          /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
-          -D TDESKTOP_API_ID=${TDESKTOP_API_ID} \
-          -D TDESKTOP_API_HASH=${TDESKTOP_API_HASH} \
-          $DEFINE
+            -u $(id -u) \
+            -v $PWD:/usr/src/tdesktop \
+            -e MAKEFLAGS="-j2" \
+            $IMAGE_TAG \
+            /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
+              -D TDESKTOP_API_ID=${TDESKTOP_API_ID} \
+              -D TDESKTOP_API_HASH=${TDESKTOP_API_HASH} \
+              -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
+              $DEFINE
 
       - name: Check
         run: |
