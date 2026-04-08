@@ -56,11 +56,18 @@ jobs:
           poetry install
 
           # 確保不使用 LTO
-          DOCKERFILE=$(LTO= poetry run gen_dockerfile)
-          echo "$DOCKERFILE" > Dockerfile
+          LTO= poetry run gen_dockerfile > Dockerfile
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: |
+            env.BUILDKIT_STEP_LOG_MAX_SIZE=10485760
+            image=moby/buildkit:latest
+          buildkitd-flags: --allow-insecure-entitlement network.host
+          config-inline: |
+            [worker.oci]
+              max-parallelism = 1
 
       - name: Build Environment Image
         uses: docker/build-push-action@v7
@@ -68,9 +75,8 @@ jobs:
           context: Telegram/build/docker/centos_env
           load: true
           tags: ${{ env.IMAGE_TAG }}
-          # 磁碟空間有限，建議「暫時關閉」本地快取，或減小快取規模
-          # cache-from: type=gha
-          # cache-to: type=gha,mode=max
+          cache-from: ""
+          cache-to: ""
 
       - name: Telegram Desktop build
         run: |
