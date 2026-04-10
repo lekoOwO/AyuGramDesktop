@@ -44,6 +44,7 @@ jobs:
     permissions:
       contents: write
     timeout-minutes: 1440
+    needs: prepare-release
 
     env:
       IMAGE_TAG: tdesktop:centos_env
