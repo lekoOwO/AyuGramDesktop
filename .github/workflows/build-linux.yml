@@ -21,7 +21,8 @@ jobs:
     steps:
       - name: Setup Environment
         run: |
-          sudo apt update
+          apt update
+          apt install -y docker.io git sudo curl
           curl -sSL https://install.python-poetry.org | python3 -
           export PATH="$HOME/.local/bin:$PATH"
           cd Telegram/build/docker/centos_env
@@ -29,8 +30,6 @@ jobs:
 
           DOCKERFILE=$(poetry run gen_dockerfile)
           echo "$DOCKERFILE" > Dockerfile
-
-          sudo apt install -y docker.io git
 
       - name: Checkout repository
         uses: actions/checkout@v4
