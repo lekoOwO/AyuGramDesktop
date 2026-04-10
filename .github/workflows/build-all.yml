@@ -40,7 +40,7 @@ jobs:
     name: Build and Release Flatpak
     runs-on: [self-hosted, yolo]
     container:
-      image: ubuntu:24.04
+      image: ubuntu/python:3.12-24.04
     permissions:
       contents: write
     timeout-minutes: 1440
