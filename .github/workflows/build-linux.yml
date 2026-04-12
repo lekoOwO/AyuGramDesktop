@@ -73,7 +73,8 @@ jobs:
             -v "$PWD:/usr/src/tdesktop" \
             -v "$PWD/.ccache:/ccache" \
             ghcr.io/telegramdesktop/tdesktop/centos_env:latest \
-            /bin/bash -c "dnf install -y ccache && \
+            /bin/bash -c " ls -alh /usr/src/tdesktop; ls -alh /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh; 
+                          dnf install -y ccache && \
                           export PATH=/usr/lib64/ccache:\$PATH && \
                           export CCACHE_DIR=/ccache && \
                           export CCACHE_BASEDIR=/usr/src/tdesktop && \
