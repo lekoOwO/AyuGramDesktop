@@ -94,6 +94,7 @@ jobs:
 
       - name: Telegram Desktop build
         run: |
+          cd "${{ github.workspace }}"
           mkdir -p .ccache
           sudo chmod -R 777 .ccache
 
