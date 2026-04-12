@@ -65,27 +65,28 @@ jobs:
 
       - name: Telegram Desktop build
         run: |
+          CONTAINER_ID=$(hostname);
+
           docker run --rm \
             -u root \
-            -v "$GITHUB_WORKSPACE:/usr/src/tdesktop" \
-            -v "$GITHUB_WORKSPACE/.ccache:/ccache" \
+            --volumes-from "$CONTAINER_ID" \
             ghcr.io/telegramdesktop/tdesktop/centos_env:latest \
-            /bin/bash -c " ls -alh /usr/src/tdesktop; ls -alh /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh; 
+            /bin/bash -c "cd "$GITHUB_WORKSPACE" && \
                           dnf install -y ccache && \
                           export PATH=/usr/lib64/ccache:\$PATH && \
-                          export CCACHE_DIR=/ccache && \
+                          export CCACHE_DIR=$GITHUB_WORKSPACE/.ccache && \
                           export CCACHE_BASEDIR=/usr/src/tdesktop && \
                           export CCACHE_COMPRESS=1 && \
                           export CCACHE_MAXSIZE=10G && \
                           export CC='ccache gcc' && \
                           export CXX='ccache g++' && \
-                          /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
+                          ./Telegram/build/docker/centos_env/build.sh \
                             -D TDESKTOP_API_ID=${TDESKTOP_API_ID} \
                             -D TDESKTOP_API_HASH=${TDESKTOP_API_HASH} \
                             -D USE_CCACHE=ON && \
                           ccache -s"
 
-          sudo chown -R "$(id -u):$(id -g)" .ccache || true
+          sudo chown -R "$(id -u):$(id -g)" .ccache out || true
 
       - name: Save TDesktop dependencies cache
         if: always() && steps.cache-tdeps.outputs.cache-hit != 'true'
