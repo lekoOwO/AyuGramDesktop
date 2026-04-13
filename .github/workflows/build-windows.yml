@@ -1,0 +1,119 @@
+name: Build Windows x64
+
+on:
+  workflow_dispatch:
+
+env:
+  TDESKTOP_API_ID: 2040
+  TDESKTOP_API_HASH: b18441a1ff607e10a989891a5462e627
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Increase Pagefile
+        shell: pwsh
+        run: |
+          $NewPageFileSize = 64GB
+          $Drive = Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DeviceID -eq "C:" }
+          Set-CimInstance -Query "Select * from Win32_PageFileSetting" -Property @{ InitialSize = [int]($NewPageFileSize/1MB); MaximumSize = [int]($NewPageFileSize/1MB) }
+          # 如果沒有預設 Pagefile，則創建一個
+          if (-not (Get-CimInstance Win32_PageFileSetting)) {
+            New-CimInstance -ClassName Win32_PageFileSetting -Property @{ Name = "C:\pagefile.sys"; InitialSize = [int]($NewPageFileSize/1MB); MaximumSize = [int]($NewPageFileSize/1MB) }
+          }
+
+      - name: Patch CMake Files
+        shell: pwsh
+        run: |
+          # --- 1. 修改 cmake/options_win.cmake ---
+          $optionsFile = "cmake/options_win.cmake"
+          if (Test-Path $optionsFile) {
+              $optContent = Get-Content $optionsFile -Raw
+              $optContent = $optContent -replace '/MP\s+# Enable multi process build\.', "/FS`n                /Zm500"
+
+              # 修正 Debug 判斷式
+              $oldExpr = '$<$<NOT:$<AND:$<CONFIG:Debug>,$<BOOL:${build_win64}>>>:$<IF:$<STREQUAL:$<GENEX_EVAL:$<TARGET_PROPERTY:MSVC_DEBUG_INFORMATION_FORMAT>>,ProgramDatabase>,/DEBUG,/DEBUG:NONE>>'
+              $newExpr = '$<$<NOT:$<AND:$<CONFIG:Debug>,$<BOOL:${build_win64}>>>:$<IF:$<BOOL:$<GENEX_EVAL:$<TARGET_PROPERTY:MSVC_DEBUG_INFORMATION_FORMAT>>>,/DEBUG,/DEBUG:NONE>>'
+              if ($optContent.Contains($oldExpr)) { $optContent = $optContent.Replace($oldExpr, $newExpr) }
+
+              $optContent | Set-Content $optionsFile -Encoding UTF8
+          }
+
+          # --- 2. 修改 cmake/variables.cmake ---
+          $varsFile = "cmake/variables.cmake"
+          if (Test-Path $varsFile) {
+              $varsContent = Get-Content $varsFile -Raw
+              $oldVar = 'set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "ProgramDatabase" CACHE STRING "")'
+              # 強制 Release 模式使用 Embedded 減少 PDB 負擔
+              $newVar = "set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT`n        `"`$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>`$<$<CONFIG:Release,MinSizeRel>:Embedded>`"`n        CACHE STRING `"`" FORCE)"
+              if ($varsContent.Contains($oldVar)) { $varsContent = $varsContent.Replace($oldVar, $newVar) }
+              $varsContent | Set-Content $varsFile -Encoding UTF8
+          }
+      
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Prepare build environment
+        shell: cmd
+        run: |
+          cd Telegram\build\prepare
+          call win.bat
+
+      
+      - name: Configure project
+        shell: cmd
+        run: |
+          cd Telegram
+          call configure.bat x64 -D TDESKTOP_API_ID=%TDESKTOP_API_ID% -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH%
+
+      - name: Build project
+        shell: cmd
+        run: |
+          cmake --build out --config Release --target Telegram -- /m:1
+
+      - name: Prepare artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts -Force
+          Copy-Item out\Release\AyuGram.exe artifacts\AyuGram-windows-x64.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AyuGram-windows-x64
+          path: artifacts/AyuGram-windows-x64.exe
+          retention-days: 7
+
+      - name: Generate release info
+        id: release_info
+        shell: pwsh
+        run: |
+          $commitSha = git rev-parse --short HEAD
+          $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+          $releaseName = "CI-$commitSha-$timestamp"
+          echo "commit_sha=$commitSha" >> $env:GITHUB_OUTPUT
+          echo "timestamp=$timestamp" >> $env:GITHUB_OUTPUT
+          echo "release_name=$releaseName" >> $env:GITHUB_OUTPUT
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+        with:
+          tag_name: ${{ steps.release_info.outputs.release_name }}
+          name: "CI Build ${{ steps.release_info.outputs.commit_sha }} (${{ steps.release_info.outputs.timestamp }})"
+          prerelease: true
+          files: artifacts/AyuGram-windows-x64.exe
+          token: ${{ secrets.GITHUB_TOKEN }}

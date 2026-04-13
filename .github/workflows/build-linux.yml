@@ -1,0 +1,167 @@
+name: Build AyuGram Flatpak
+
+on:
+  workflow_dispatch:
+
+env:
+  TDESKTOP_API_ID: 2040
+  TDESKTOP_API_HASH: b18441a1ff607e10a989891a5462e627
+
+jobs:
+  build-and-release:
+    name: Build and Release Flatpak
+    runs-on: [self-hosted, yolo]
+    container:
+      image: ubuntu:24.04
+    permissions:
+      contents: write
+    timeout-minutes: 1440
+
+    steps:
+      - name: Setup Environment
+        run: |
+          apt update
+          apt install -y docker.io git sudo curl
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: |
+            env.BUILDKIT_STEP_LOG_MAX_SIZE=10485760
+            image=moby/buildkit:latest
+          buildkitd-flags: --allow-insecure-entitlement network.host
+
+      - name: Restore TDesktop dependencies cache
+        id: cache-tdeps
+        uses: actions/cache/restore@v4
+        with:
+          path: Telegram/ThirdParty
+          key: ${{ runner.os }}-tdeps-${{ hashFiles('Telegram/build/prepare/dependencies.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-tdeps-
+
+      - name: Restore Qt6 libraries cache
+        id: cache-qt6
+        uses: actions/cache/restore@v4
+        with:
+          path: Libraries/qt6
+          key: ${{ runner.os }}-qt6-${{ hashFiles('Telegram/build/prepare/linux.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-qt6-
+
+      - name: Restore ccache data
+        uses: actions/cache/restore@v4
+        id: cache-ccache
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-
+
+      - name: Telegram Desktop build
+        run: |
+          CONTAINER_ID=$(hostname);
+
+          docker run --rm -i \
+            -u root \
+            --volumes-from "$CONTAINER_ID" \
+            ghcr.io/telegramdesktop/tdesktop/centos_env:latest \
+            /bin/bash -s <<DOCKER_SCRIPT
+          set -e
+          cd "$GITHUB_WORKSPACE";
+
+          dnf install -y ccache
+          export PATH=/usr/lib64/ccache:\$PATH
+          export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
+          export CCACHE_BASEDIR="/usr/src/tdesktop"
+          export CCACHE_COMPRESS=1
+          export CCACHE_MAXSIZE=10G
+          export CC='ccache gcc'
+          export CXX='ccache g++'
+
+          ./Telegram/build/docker/centos_env/build.sh \
+              -D TDESKTOP_API_ID=${TDESKTOP_API_ID} \
+              -D TDESKTOP_API_HASH=${TDESKTOP_API_HASH} \
+              -D USE_CCACHE=ON
+
+          ccache -s
+          DOCKER_SCRIPT
+
+          sudo chown -R "$(id -u):$(id -g)" .ccache out || true
+
+      - name: Save TDesktop dependencies cache
+        if: always() && steps.cache-tdeps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: Telegram/ThirdParty
+          key: ${{ steps.cache-tdeps.outputs.cache-primary-key }}
+
+      - name: Save Qt6 libraries cache
+        if: always() && steps.cache-qt6.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: Libraries/qt6
+          key: ${{ steps.cache-qt6.outputs.cache-primary-key }}
+
+      - name: Save ccache data
+        if: always() && steps.cache-ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ${{ steps.cache-ccache.outputs.cache-primary-key }}
+
+      - name: Check Binary
+        run: |
+          if [ -f out/Release/AyuGram ]; then
+            echo "Build successful."
+            ls -lh out/Release/AyuGram
+          else
+            echo "Build failed: Binary not found."
+            ls -lhR out
+            exit 1
+          fi
+
+      - name: Build Flatpak
+        run: |
+          CONTAINER_ID=$(hostname)
+
+          docker run --rm -i \
+            -u root \
+            --volumes-from "$CONTAINER_ID" \
+            --privileged \
+            --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
+            --security-opt unmask=ALL \
+            ghcr.io/flathub-infra/flatpak-github-actions:gnome-48 \
+            /bin/bash -s <<DOCKER_SCRIPT
+          set -e
+          cd "$GITHUB_WORKSPACE"
+
+          mkdir -p ayugram-flatpak-build
+          cp out/Release/AyuGram ayugram-flatpak-build/
+
+          if [ -d docs/assets/flatpak-files ]; then
+            cp -r docs/assets/flatpak-files/* ayugram-flatpak-build/
+          fi
+
+          cd ayugram-flatpak-build
+          flatpak-builder --no-sandbox --repo=repo --force-clean --disable-rofiles-fuse build-dir com.ayugram.desktop.yml
+          flatpak build-bundle repo ayugram-desktop.flatpak com.ayugram.desktop
+          DOCKER_SCRIPT
+
+          ls -alh ayugram-flatpak-build
+          sudo chown -R "$(id -u):$(id -g)" ayugram-flatpak-build
+      
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: "CI-${{ github.sha }}-${{ github.run_id }}"
+          name: "AyuGram Linux Build"
+          files: ayugram-flatpak-build/ayugram-desktop.flatpak
+          token: ${{ secrets.GITHUB_TOKEN }}
